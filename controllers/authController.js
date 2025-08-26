@@ -1,26 +1,38 @@
-// *Handles registration, login, and checking current logged-in user. Manages password hashing and JWT tokens.
-
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const fs = require("fs");
+const path = require("path");
 const User = require("../models/User");
+
+const allowedExts = [".pdf", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".gif"];
 
 // Register user
 const register = async (req, res) => {
   try {
     const { role, username, email, password, phone } = req.body;
-    const bankStatement = req.file ? req.file.path : null;
 
     if (!role || !username || !email || !password) {
-      return res
-        .status(400)
-        .json({ error: "Bad Request", message: "Missing required fields" });
+      if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+      return res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
+    }
+
+    // Validate bank statement file
+    let bankStatement = null;
+    if (req.file) {
+      const ext = path.extname(req.file.originalname).toLowerCase();
+      if (!allowedExts.includes(ext)) {
+        if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(400).json({ error: "Invalid file type" });
+      }
+      bankStatement = req.file.filename;
     }
 
     const existingUser = await User.findOne({ email });
     if (existingUser) {
-      return res
-        .status(409)
-        .json({ error: "Conflict", message: "User with this email already exists" });
+      if (bankStatement && fs.existsSync(path.join("uploads", bankStatement))) {
+        fs.unlinkSync(path.join("uploads", bankStatement));
+      }
+      return res.status(409).json({ error: "Conflict", message: "User with this email already exists" });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -31,69 +43,46 @@ const register = async (req, res) => {
       email,
       password: hashedPassword,
       phone,
-      bankStatement,
+      bankStatement
     });
 
     res.status(201).json({
       message: "Registration submitted successfully. Awaiting admin approval",
-      status: user.status,
+      status: user.status
     });
   } catch (err) {
+    console.error("Register error:", err);
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     res.status(500).json({ error: "Server Error", message: err.message });
   }
 };
 
-// Login user
+// Login (unchanged)
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-
     const user = await User.findOne({ email });
-    if (!user) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", message: "Invalid email or password" });
-    }
+    if (!user) return res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res
-        .status(401)
-        .json({ error: "Unauthorized", message: "Invalid email or password" });
-    }
+    if (!isMatch) return res.status(401).json({ error: "Unauthorized", message: "Invalid email or password" });
 
-    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
-      expiresIn: "1h",
-    });
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1h" });
 
-    res.json({
-      message: "Login successful",
-      token,
-      role: user.role,
-    });
+    res.json({ message: "Login successful", token, role: user.role });
   } catch (err) {
     res.status(500).json({ error: "Server Error", message: err.message });
   }
 };
 
-// Check user
+// Check user (unchanged)
 const checkUser = async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-password");
-    res.json({
-      message: "Valid user",
-      role: user.role,
-      userId: user._id,
-      username: user.username,
-    });
+    res.json({ message: "Valid user", role: user.role, userId: user._id, username: user.username });
   } catch (err) {
     res.status(500).json({ error: "Server Error", message: err.message });
   }
 };
 
-// 👇 Export all at bottom
-module.exports = {
-  register,
-  login,
-  checkUser,
-};
+module.exports = { register, login, checkUser };
